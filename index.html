@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>Nebula Strings - Hand Tracking Interactive Art</title>
+    <title>Nebula Strings - Interactive Hand Tracking Art</title>
     <style>
         * {
             margin: 0;
@@ -93,11 +93,6 @@
             z-index: 30;
             pointer-events: none;
         }
-
-        @keyframes subtlePulse {
-            0% { opacity: 0.6; text-shadow: 0 0 2px cyan; }
-            100% { opacity: 1; text-shadow: 0 0 8px magenta; }
-        }
     </style>
     <!-- Load MediaPipe Hands and p5.js -->
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
@@ -108,7 +103,7 @@
 <div class="vignette"></div>
 <div class="info-panel">
     ⚡ <span>NEBULA STRINGS</span> • FINGERTIP WEAVE ⚡<br>
-    🤘 Move hands apart → strings stretch & glow intensifies
+    🤘 Move hands apart → strings stretch & glow intensifies | ✨ Touch fingertips → particle explosion
 </div>
 <div class="status-badge" id="cameraStatus">🔍 INITIALIZING CAMERA...</div>
 
@@ -116,48 +111,50 @@
     // ----------------------------------------------
     //  GLOBALS & STATE
     // ----------------------------------------------
-    let videoElement;          // hidden video element for MediaPipe (we'll hide it visually)
-    let hands;                // MediaPipe Hands instance
+    let videoElement;
+    let handsInstance;
     let cameraActive = false;
     
-    // Landmark storage: left hand & right hand fingertips (indices: 4,8,12,16,20)
-    // For each hand we store an array of 5 points {x, y} (normalized 0..1)
-    let leftFingertips = [null, null, null, null, null];   // thumb, index, middle, ring, pinky
+    // Store all landmarks for both hands (21 points each) for drawing full hand skeleton
+    let leftHandLandmarks = null;
+    let rightHandLandmarks = null;
+    
+    // Fingertip indices for string connections (MediaPipe HandLandmark indices)
+    const FINGERTIP_IDS = [4, 8, 12, 16, 20]; // THUMB_TIP, INDEX_FINGER_TIP, MIDDLE_FINGER_TIP, RING_FINGER_TIP, PINKY_TIP
+    
+    // Store fingertip positions for both hands (normalized 0-1)
+    let leftFingertips = [null, null, null, null, null];
     let rightFingertips = [null, null, null, null, null];
     
-    // landmark indices for fingertips (MediaPipe HandLandmark)
-    const FINGERTIP_IDS = [4, 8, 12, 16, 20];   // THUMB_TIP, INDEX_FINGER_TIP, MIDDLE_FINGER_TIP, RING_FINGER_TIP, PINKY_TIP
-    
-    // for elastic / dynamic line effect: store previous distances for smooth lerp (optional)
+    // Smooth distances for elastic feel
     let currentDistances = Array(5).fill(0);
     let targetDistances = Array(5).fill(0);
     
-    // additional glow and aesthetic variables
-    let frameCount = 0;
-    let camWidth = 640, camHeight = 480;
-    let canvasReady = false;
-    
-    // particle explosion effect for fingertip touches (both hands same fingertip index)
+    // Particle system for touch explosions
     let particles = [];
-    const PARTICLE_LIFESPAN = 25;
+    const PARTICLE_LIFESPAN = 30;
     
-    // Particle class for tiny explosion effects
+    // Animation frame counter
+    let frameCounter = 0;
+    let camWidth = 640, camHeight = 480;
+    
+    // Particle class for explosion effects
     class Particle {
-        constructor(x, y, color) {
+        constructor(x, y, colorVal) {
             this.x = x;
             this.y = y;
-            this.vx = (Math.random() - 0.5) * 6;
-            this.vy = (Math.random() - 0.5) * 5 - 1.5;
+            this.vx = (Math.random() - 0.5) * 8;
+            this.vy = (Math.random() - 0.5) * 7 - 2;
             this.life = PARTICLE_LIFESPAN;
             this.maxLife = PARTICLE_LIFESPAN;
-            this.color = color;
-            this.size = random(2, 5);
+            this.color = colorVal;
+            this.size = random(2, 6);
         }
         
         update() {
             this.x += this.vx;
             this.y += this.vy;
-            this.vy += 0.15; // slight gravity
+            this.vy += 0.2;
             this.life -= 1.2;
             return this.life > 0;
         }
@@ -166,63 +163,63 @@
             let alpha = map(this.life, 0, this.maxLife, 0, 0.9);
             noStroke();
             fill(red(this.color), green(this.color), blue(this.color), alpha * 200);
-            ellipse(this.x, this.y, this.size * (1 - (this.life/this.maxLife)*0.5), this.size * (1 - (this.life/this.maxLife)*0.5));
+            ellipse(this.x, this.y, this.size * (1 - (this.life/this.maxLife) * 0.4), this.size * (1 - (this.life/this.maxLife) * 0.4));
         }
     }
     
-    // helper: convert normalized landmark -> canvas coordinates
-    function normToCanvas(x, y, w, h) {
-        return { x: x * w, y: y * h };
-    }
-    
-    // reset fingers if tracking lost
-    function resetFingertips() {
-        leftFingertips = [null, null, null, null, null];
-        rightFingertips = [null, null, null, null, null];
-    }
-    
-    // Process mediapipe results: update leftFingertips & rightFingertips arrays
+    // MediaPipe Hands callback
     function onHandResults(results) {
         if (!results.multiHandLandmarks || results.multiHandLandmarks.length === 0) {
-            // if no hands, reset after short timeout? but keep last points for smooth fading? 
-            // Actually for realistic effect, if no hand, we clear fingertips so strings vanish gradually.
-            resetFingertips();
+            // No hands detected - gradually fade out by keeping last positions? 
+            // But we'll just keep existing until next detection
             return;
         }
         
-        // temporary containers for left & right detected points (by handedness)
-        let newLeft = [null, null, null, null, null];
-        let newRight = [null, null, null, null, null];
+        // Reset temporary arrays
+        let newLeftFingertips = [null, null, null, null, null];
+        let newRightFingertips = [null, null, null, null, null];
+        let newLeftLandmarks = null;
+        let newRightLandmarks = null;
         
+        // Process each detected hand
         for (let i = 0; i < results.multiHandLandmarks.length; i++) {
             const landmarks = results.multiHandLandmarks[i];
             const handedness = results.multiHandedness[i].label; // "Left" or "Right"
-            const targetArray = (handedness === "Left") ? newLeft : newRight;
             
-            // extract fingertip positions (normalized 0-1)
-            for (let idx = 0; idx < FINGERTIP_IDS.length; idx++) {
-                const tipId = FINGERTIP_IDS[idx];
-                const lm = landmarks[tipId];
-                if (lm) {
-                    targetArray[idx] = { x: lm.x, y: lm.y, z: lm.z };
+            if (handedness === "Left") {
+                newLeftLandmarks = landmarks;
+                for (let idx = 0; idx < FINGERTIP_IDS.length; idx++) {
+                    const tipId = FINGERTIP_IDS[idx];
+                    const lm = landmarks[tipId];
+                    if (lm) {
+                        newLeftFingertips[idx] = { x: lm.x, y: lm.y, z: lm.z };
+                    }
+                }
+            } else if (handedness === "Right") {
+                newRightLandmarks = landmarks;
+                for (let idx = 0; idx < FINGERTIP_IDS.length; idx++) {
+                    const tipId = FINGERTIP_IDS[idx];
+                    const lm = landmarks[tipId];
+                    if (lm) {
+                        newRightFingertips[idx] = { x: lm.x, y: lm.y, z: lm.z };
+                    }
                 }
             }
         }
         
-        // update global arrays only for fingertips that are present (others stay null)
+        // Update global fingertip arrays
         for (let i = 0; i < 5; i++) {
-            if (newLeft[i] !== null) leftFingertips[i] = newLeft[i];
-            if (newRight[i] !== null) rightFingertips[i] = newRight[i];
+            if (newLeftFingertips[i] !== null) leftFingertips[i] = newLeftFingertips[i];
+            if (newRightFingertips[i] !== null) rightFingertips[i] = newRightFingertips[i];
         }
         
-        // Optional: reset entire arrays if one hand completely missing? To avoid ghost strings, we check if no hand found: above reset if none.
-        // But if only left exists, right will be partially null; drawing handles null.
-        if (results.multiHandLandmarks.length === 0) resetFingertips();
+        // Update full landmark arrays for drawing hand skeletons
+        if (newLeftLandmarks !== null) leftHandLandmarks = newLeftLandmarks;
+        if (newRightLandmarks !== null) rightHandLandmarks = newRightLandmarks;
         
-        // update target distances for elastic animation (for each finger pair)
+        // Update target distances for strings (elastic effect)
         for (let i = 0; i < 5; i++) {
             if (leftFingertips[i] && rightFingertips[i]) {
-                // distance in normalized coordinates (0-1 range) then map to canvas independent later for dynamic thickness
                 let dx = leftFingertips[i].x - rightFingertips[i].x;
                 let dy = leftFingertips[i].y - rightFingertips[i].y;
                 let distNorm = Math.hypot(dx, dy);
@@ -232,51 +229,59 @@
             }
         }
         
-        // smooth current distances (lerp for elastic feel)
+        // Smooth current distances
         for (let i = 0; i < 5; i++) {
-            currentDistances[i] = lerp(currentDistances[i], targetDistances[i], 0.35);
+            currentDistances[i] = lerp(currentDistances[i], targetDistances[i], 0.4);
         }
         
-        // Detect fingertip-to-fingertip contact (both hands, same index) to trigger PARTICLE EXPLOSION
+        // Check for fingertip touches (both hands, same finger index)
         for (let i = 0; i < 5; i++) {
             if (leftFingertips[i] && rightFingertips[i]) {
                 let dx = leftFingertips[i].x - rightFingertips[i].x;
                 let dy = leftFingertips[i].y - rightFingertips[i].y;
                 let distance = Math.hypot(dx, dy);
-                // threshold for "touch" ~ less than 2.5% of screen space (normalized ~0.025)
-                if (distance < 0.028) {
-                    // generate particle explosion at midpoint
-                    let midXCanvas = ((leftFingertips[i].x + rightFingertips[i].x) / 2) * camWidth;
-                    let midYCanvas = ((leftFingertips[i].y + rightFingertips[i].y) / 2) * camHeight;
-                    let explosionColors = [color(0, 255, 255), color(255, 68, 238), color(255, 240, 80)];
-                    let particleCount = 12 + Math.floor(Math.random() * 10);
+                
+                // Threshold for "touch" - about 2% of screen width
+                if (distance < 0.025) {
+                    // Create particle explosion at midpoint
+                    let midX = ((leftFingertips[i].x + rightFingertips[i].x) / 2) * camWidth;
+                    let midY = ((leftFingertips[i].y + rightFingertips[i].y) / 2) * camHeight;
+                    
+                    let explosionColors = [
+                        color(0, 255, 255),   // cyan
+                        color(255, 68, 238),  // magenta
+                        color(255, 240, 80),  // yellow
+                        color(150, 0, 255)     // purple
+                    ];
+                    
+                    let particleCount = 15 + Math.floor(Math.random() * 12);
                     for (let p = 0; p < particleCount; p++) {
                         let col = explosionColors[Math.floor(Math.random() * explosionColors.length)];
-                        particles.push(new Particle(midXCanvas, midYCanvas, col));
+                        particles.push(new Particle(midX, midY, col));
                     }
                 }
             }
         }
     }
     
-    // Initialize MediaPipe Hands with higher detection confidence
-    function initMediaPipe() {
-        hands = new Hands({
+    // Initialize MediaPipe and Camera
+    function initMediaPipeAndCamera() {
+        handsInstance = new Hands({
             locateFile: (file) => {
                 return `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`;
             }
         });
         
-        hands.setOptions({
+        handsInstance.setOptions({
             maxNumHands: 2,
-            modelComplexity: 1,       // better accuracy
+            modelComplexity: 1,
             minDetectionConfidence: 0.5,
             minTrackingConfidence: 0.5
         });
         
-        hands.onResults(onHandResults);
+        handsInstance.onResults(onHandResults);
         
-        // setup camera via mediapipe camera utils (simpler)
+        // Create hidden video element for camera feed
         const video = document.createElement('video');
         video.setAttribute('autoplay', '');
         video.setAttribute('playsinline', '');
@@ -284,67 +289,199 @@
         video.style.top = '0';
         video.style.left = '0';
         video.style.width = '100%';
-        video.style.height = 'auto';
-        video.style.opacity = '0';      // HIDE RAW VIDEO FEED but keep tracking (silhouette captured by p5)
+        video.style.height = '100%';
+        video.style.objectFit = 'cover';
+        video.style.opacity = '0.35'; // Subtle visible silhouette
         video.style.pointerEvents = 'none';
-        video.style.zIndex = '-1';
+        video.style.zIndex = '1';
         document.body.appendChild(video);
         videoElement = video;
         
-        // Use standard getUserMedia to feed into MediaPipe
+        // Request camera access
         if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
-            navigator.mediaDevices.getUserMedia({ video: { width: { ideal: 640 }, height: { ideal: 480 } } })
-                .then(stream => {
-                    videoElement.srcObject = stream;
-                    videoElement.onloadedmetadata = () => {
-                        videoElement.play();
-                        camWidth = videoElement.videoWidth || 640;
-                        camHeight = videoElement.videoHeight || 480;
-                        document.getElementById('cameraStatus').innerHTML = "✅ CAMERA ACTIVE • HANDS READY";
-                        cameraActive = true;
-                        // send frames to MediaPipe
-                        const sendToMediaPipe = async () => {
-                            if (!cameraActive || !videoElement || videoElement.paused) return;
-                            if (videoElement.readyState >= 2) {
-                                await hands.send({ image: videoElement });
-                            }
-                            requestAnimationFrame(sendToMediaPipe);
-                        };
-                        sendToMediaPipe();
+            navigator.mediaDevices.getUserMedia({ 
+                video: { width: { ideal: 1280 }, height: { ideal: 720 } } 
+            })
+            .then(stream => {
+                videoElement.srcObject = stream;
+                videoElement.onloadedmetadata = () => {
+                    videoElement.play();
+                    camWidth = videoElement.videoWidth || 1280;
+                    camHeight = videoElement.videoHeight || 720;
+                    document.getElementById('cameraStatus').innerHTML = "✅ CAMERA ACTIVE • HANDS READY";
+                    cameraActive = true;
+                    
+                    // Start sending frames to MediaPipe
+                    const processFrame = async () => {
+                        if (!cameraActive || !videoElement || videoElement.paused || !handsInstance) return;
+                        if (videoElement.readyState >= 2) {
+                            await handsInstance.send({ image: videoElement });
+                        }
+                        requestAnimationFrame(processFrame);
                     };
-                })
-                .catch(err => {
-                    console.error("Camera error:", err);
-                    document.getElementById('cameraStatus').innerHTML = "⚠️ CAMERA PERMISSION ERROR";
-                });
+                    processFrame();
+                };
+            })
+            .catch(err => {
+                console.error("Camera error:", err);
+                document.getElementById('cameraStatus').innerHTML = "⚠️ CAMERA PERMISSION ERROR";
+            });
         } else {
             document.getElementById('cameraStatus').innerHTML = "❌ No camera support";
         }
     }
     
-    // ---------- P5.JS DRAWING: GLOWING NEON LANDMARKS + DYNAMIC STRINGS ----------
+    // Helper: Draw hand skeleton with glowing joints
+    function drawHandSkeleton(landmarks, isLeft) {
+        if (!landmarks) return;
+        
+        const connections = [
+            [0, 1], [1, 2], [2, 3], [3, 4], // Thumb
+            [0, 5], [5, 6], [6, 7], [7, 8], // Index
+            [0, 9], [9, 10], [10, 11], [11, 12], // Middle
+            [0, 13], [13, 14], [14, 15], [15, 16], // Ring
+            [0, 17], [17, 18], [18, 19], [19, 20]  // Pinky
+        ];
+        
+        // Draw connection lines (glowing)
+        for (let conn of connections) {
+            const start = landmarks[conn[0]];
+            const end = landmarks[conn[1]];
+            if (start && end) {
+                let x1 = start.x * width;
+                let y1 = start.y * height;
+                let x2 = end.x * width;
+                let y2 = end.y * height;
+                
+                drawingContext.shadowBlur = 8;
+                drawingContext.shadowColor = isLeft ? 'rgba(0, 255, 255, 0.6)' : 'rgba(255, 68, 238, 0.6)';
+                strokeWeight(2.5);
+                let lineColor = isLeft ? color(0, 200, 255, 180) : color(255, 80, 220, 180);
+                stroke(lineColor);
+                line(x1, y1, x2, y2);
+            }
+        }
+        
+        // Draw joints (glowing dots)
+        for (let i = 0; i < landmarks.length; i++) {
+            const lm = landmarks[i];
+            if (lm) {
+                let x = lm.x * width;
+                let y = lm.y * height;
+                
+                // Outer glow
+                drawingContext.shadowBlur = 12;
+                drawingContext.shadowColor = isLeft ? 'rgba(0, 255, 255, 0.8)' : 'rgba(255, 68, 238, 0.8)';
+                fill(isLeft ? color(0, 255, 255) : color(255, 68, 238));
+                noStroke();
+                ellipse(x, y, 8, 8);
+                
+                // Inner bright core
+                drawingContext.shadowBlur = 6;
+                fill(255, 255, 255, 220);
+                ellipse(x, y, 4, 4);
+            }
+        }
+    }
+    
+    // Draw glowing strings between fingertips
+    function drawStrings() {
+        for (let i = 0; i < 5; i++) {
+            let left = leftFingertips[i];
+            let right = rightFingertips[i];
+            
+            if (left && right) {
+                let fromX = left.x * width;
+                let fromY = left.y * height;
+                let toX = right.x * width;
+                let toY = right.y * height;
+                
+                let distancePx = dist(fromX, fromY, toX, toY);
+                let stretch = map(min(distancePx, 500), 20, 400, 0.3, 1.2);
+                let lineWidth = map(min(distancePx, 500), 20, 400, 3, 12, true);
+                
+                // Dynamic color based on stretch and finger index
+                let hue1, hue2;
+                if (i === 0) { hue1 = color(0, 200, 255); hue2 = color(255, 80, 200); }
+                else if (i === 1) { hue1 = color(100, 255, 200); hue2 = color(255, 150, 80); }
+                else if (i === 2) { hue1 = color(255, 80, 200); hue2 = color(0, 255, 200); }
+                else if (i === 3) { hue1 = color(200, 80, 255); hue2 = color(80, 255, 200); }
+                else { hue1 = color(80, 200, 255); hue2 = color(255, 200, 80); }
+                
+                // Multiple layers for laser beam effect
+                for (let layer = 0; layer < 3; layer++) {
+                    let blur = 12 - layer * 3;
+                    drawingContext.shadowBlur = blur;
+                    drawingContext.shadowColor = `rgba(0, 255, 200, 0.7)`;
+                    let alphaVal = map(layer, 0, 2, 0.9, 0.3);
+                    let layerWidth = lineWidth + (layer * 2);
+                    strokeWeight(layerWidth);
+                    
+                    // Gradient along line
+                    let grad = drawingContext.createLinearGradient(fromX, fromY, toX, toY);
+                    grad.addColorStop(0, `rgba(${red(hue1)}, ${green(hue1)}, ${blue(hue1)}, ${alphaVal * (0.7 + stretch * 0.3)})`);
+                    grad.addColorStop(1, `rgba(${red(hue2)}, ${green(hue2)}, ${blue(hue2)}, ${alphaVal * (0.7 + stretch * 0.3)})`);
+                    drawingContext.strokeStyle = grad;
+                    line(fromX, fromY, toX, toY);
+                }
+                
+                // Bright core line
+                drawingContext.shadowBlur = 4;
+                strokeWeight(2);
+                stroke(255, 255, 200, 220);
+                line(fromX, fromY, toX, toY);
+                
+                // Energy particles along the string
+                if (frameCounter % 8 === i) {
+                    let t = (sin(frameCounter * 0.05 + i) + 1) / 2;
+                    let sparkX = lerp(fromX, toX, t);
+                    let sparkY = lerp(fromY, toY, t);
+                    fill(255, 200, 100, 230);
+                    noStroke();
+                    ellipse(sparkX, sparkY, 5, 5);
+                }
+            }
+        }
+    }
+    
+    // Update particle system
+    function updateParticles() {
+        for (let i = particles.length - 1; i >= 0; i--) {
+            let alive = particles[i].update();
+            particles[i].draw();
+            if (!alive) {
+                particles.splice(i, 1);
+            }
+        }
+    }
+    
+    // p5.js setup
     function setup() {
         let canvas = createCanvas(windowWidth, windowHeight);
         canvas.style('display', 'block');
         canvas.style('position', 'fixed');
         canvas.style('top', '0');
         canvas.style('left', '0');
-        canvas.style('z-index', '5');
+        canvas.style('z-index', '10');
+        canvas.style('pointer-events', 'none');
         colorMode(RGB, 255);
         frameRate(60);
-        background(5, 5, 20);
-        // set shadowBlur globally for glow (will be tweaked per shape)
-        drawingContext.shadowBlur = 0;
-        initMediaPipe();
+        
+        // Deep midnight blue background
+        background(5, 8, 25);
+        
+        initMediaPipeAndCamera();
     }
     
-    // draw mirrored video as subtle silhouette effect (barely visible but preserving hand tracking sense)
-    function drawMirroredVideoBackground() {
+    function draw() {
+        // Clear with translucent background for trail effect
+        background(5, 8, 25, 40);
+        
+        // Draw mirror-flipped camera feed as subtle background
         if (videoElement && videoElement.readyState === videoElement.HAVE_ENOUGH_DATA && cameraActive) {
-            // push/pop to avoid transformation conflict
             push();
             translate(width, 0);
-            scale(-1, 1);   // mirror horizontally for natural selfie view
+            scale(-1, 1);
             let vidW = videoElement.videoWidth;
             let vidH = videoElement.videoHeight;
             let scaleW = width / vidW;
@@ -354,189 +491,47 @@
             let drawH = vidH * scaleFactor;
             let offX = (width - drawW) / 2;
             let offY = (height - drawH) / 2;
-            // very subtle ghost silhouette: black with blue tint
-            tint(20, 30, 50, 40);
+            
+            // Semi-transparent silhouette effect
+            tint(30, 40, 70, 60);
             image(videoElement, offX, offY, drawW, drawH);
             noTint();
             pop();
-        } else {
-            // fallback deep midnight blue gradient
-            background(5, 8, 25);
-        }
-        // extra overlay: deep midnight blue semi-transparent to mute video further
-        fill(2, 5, 15, 70);
-        noStroke();
-        rect(0, 0, width, height);
-    }
-    
-    // draw glowing neon dots on landmarks for both hands (only fingertips for string sync but also all joints optional
-    // extra: draw ALL 21 joints for extra cyberpunk? but at least draw fingertips as bright nodes
-    function drawGlowingLandmarks() {
-        // helper to draw a set of fingertips given normalized points
-        function drawFingertipSet(points, hueColor) {
-            if (!points) return;
-            for (let i = 0; i < points.length; i++) {
-                let pt = points[i];
-                if (pt && pt.x && pt.y) {
-                    let canvasX = pt.x * width;
-                    let canvasY = pt.y * height;
-                    // glow layers
-                    drawingContext.shadowBlur = 14;
-                    drawingContext.shadowColor = `rgba(0, 255, 255, 0.7)`;
-                    // neon gradient per finger?
-                    let col1 = color(0, 255, 255);   // cyan
-                    let col2 = color(255, 80, 220);  // magenta
-                    let mixVal = (sin(frameCount * 0.02 + i) * 0.5 + 0.5);
-                    let dotColor = lerpColor(col1, col2, mixVal);
-                    fill(dotColor);
-                    noStroke();
-                    ellipse(canvasX, canvasY, 12, 12);
-                    // inner bright core
-                    drawingContext.shadowBlur = 8;
-                    fill(255, 255, 200, 230);
-                    ellipse(canvasX, canvasY, 5, 5);
-                }
-            }
         }
         
-        drawingContext.shadowBlur = 12;
-        drawFingertipSet(leftFingertips, 'cyan');
-        drawFingertipSet(rightFingertips, 'magenta');
+        // Draw hand skeletons (glowing cyberpunk style)
+        drawHandSkeleton(leftHandLandmarks, true);
+        drawHandSkeleton(rightHandLandmarks, false);
         
-        // EXTRA: draw intermediate joints for a more "neon skeleton" feel (optional cool factor)
-        // but performance: only if needed - we just add subtle dots on all joints but not needed for strings
-        // For performance we skip full skeleton to maintain 60fps. But why not just fingertips is fine.
-    }
-    
-    // Draw 'laser strings' with elastic behavior, gradient glow, dynamic thickness based on distance
-    function drawDynamicStrings() {
-        for (let i = 0; i < 5; i++) {
-            let left = leftFingertips[i];
-            let right = rightFingertips[i];
-            if (left && right) {
-                let from = { x: left.x * width, y: left.y * height };
-                let to = { x: right.x * width, y: right.y * height };
-                let distancePx = dist(from.x, from.y, to.x, to.y);
-                // elasticity factor: map distance (0-~800px) -> line width between 3px and 14px
-                let lineWidth = map(min(distancePx, 500), 20, 400, 3.5, 14, true);
-                // dynamic color intensity based on stretch: distance ratio normalized (max 1.2)
-                let stretchFactor = min(distancePx / 200.0, 1.2);
-                // gradient colors: cyan, magenta, yellow cycle depending on finger index + stretch
-                let startColor, endColor;
-                let hueShift = (i * 72 + frameCount * 1.2) % 360;
-                if (i % 3 === 0) { startColor = color(0, 200 + 55 * stretchFactor, 255); endColor = color(255, 70 + stretchFactor*80, 200); }
-                else if (i % 3 === 1) { startColor = color(0, 255, 200); endColor = color(255, 50, 150 + stretchFactor*80); }
-                else { startColor = color(80, 255, 150); endColor = color(255, 200, 40); }
-                
-                // draw multiple layered strokes for laser / glow effect
-                for (let glowLayer = 0; glowLayer < 3; glowLayer++) {
-                    let blurAmount = 12 - glowLayer * 3;
-                    drawingContext.shadowBlur = blurAmount;
-                    drawingContext.shadowColor = `rgba(0, 255, 200, 0.7)`;
-                    let alphaVal = map(glowLayer, 0, 2, 0.9, 0.3);
-                    let layerWidth = lineWidth + (glowLayer * 2.5);
-                    strokeWeight(layerWidth);
-                    
-                    // dynamic gradient along line
-                    let grad = drawingContext.createLinearGradient(from.x, from.y, to.x, to.y);
-                    grad.addColorStop(0, `rgba(${red(startColor)}, ${green(startColor)}, ${blue(startColor)}, ${alphaVal})`);
-                    grad.addColorStop(1, `rgba(${red(endColor)}, ${green(endColor)}, ${blue(endColor)}, ${alphaVal})`);
-                    drawingContext.strokeStyle = grad;
-                    line(from.x, from.y, to.x, to.y);
-                }
-                // Additional energetic strokes: thin core
-                drawingContext.shadowBlur = 6;
-                strokeWeight(2.5);
-                stroke(255, 255, 210, 200);
-                line(from.x, from.y, to.x, to.y);
-                
-                // little energy pulses along the string (tiny sparks)
-                if (frameCount % 6 === i) {
-                    let sparkPos = map(sin(frameCount * 0.05 + i), -1, 1, 0, 1);
-                    let sparkX = lerp(from.x, to.x, sparkPos);
-                    let sparkY = lerp(from.y, to.y, sparkPos);
-                    fill(255, 240, 100, 220);
-                    noStroke();
-                    ellipse(sparkX, sparkY, 6, 6);
-                }
-            }
-        }
-    }
-    
-    // update and draw particle explosions
-    function updateParticles() {
-        for (let i = particles.length-1; i >= 0; i--) {
-            let alive = particles[i].update();
-            particles[i].draw();
-            if (!alive) {
-                particles.splice(i,1);
-            }
-        }
-    }
-    
-    // additional subtle glowing halos around hands: by drawing radial gradients around fingertips? optional for style
-    function drawHandAura() {
-        // Creates soft volumetric glow around each fingertip cluster
-        for (let hand of [leftFingertips, rightFingertips]) {
-            for (let i=0; i<hand.length; i++) {
-                if (hand[i]) {
-                    let cx = hand[i].x * width;
-                    let cy = hand[i].y * height;
-                    for (let r = 20; r < 45; r+=12) {
-                        drawingContext.shadowBlur = r;
-                        drawingContext.shadowColor = `rgba(0, 180, 240, 0.3)`;
-                        fill(0, 255, 200, 12);
-                        noStroke();
-                        ellipse(cx, cy, r*1.4, r*1.4);
-                    }
-                }
-            }
-        }
-    }
-    
-    function draw() {
-        // Clear with deep midnight background + draw video silhouette (muted)
-        drawMirroredVideoBackground();
+        // Draw glowing strings between fingertips
+        drawStrings();
         
-        // then draw neon strings (laser beams) first to be behind fingertips? but fingertips on top looks better
-        drawDynamicStrings();
-        
-        // Glow auras
-        drawHandAura();
-        
-        // Draw glowing dots (fingertips)
-        drawGlowingLandmarks();
-        
-        // Particle Explosions (when fingertips touch)
+        // Draw particle explosions
         updateParticles();
         
-        // optional: subtle scanning lines effect (already via CSS overlay but add p5 for more)
-        // extra futuristic grid dots
+        // Additional ambient neon grid
         push();
-        stroke(0, 255, 200, 20);
-        strokeWeight(0.8);
-        for(let i = 0; i < width; i += 45) {
+        stroke(0, 255, 200, 15);
+        strokeWeight(0.5);
+        for (let i = 0; i < width; i += 50) {
             line(i, 0, i, height);
         }
-        for(let i = 0; i < height; i += 45) {
+        for (let i = 0; i < height; i += 50) {
             line(0, i, width, i);
         }
         pop();
         
-        frameCount++;
-        // display UI info - tiny framerate independent
-        fill(0, 255, 255, 80);
+        // Draw subtle scanline
+        fill(0, 255, 255, 5);
         noStroke();
-        textFont('monospace');
-        textSize(11);
-        text("⚡ LASER WEAVE • FINGER TOUCH = PARTICLE BURST", 20, 30);
+        rect(0, frameCounter % height, width, 2);
+        
+        frameCounter++;
     }
     
     function windowResized() {
         resizeCanvas(windowWidth, windowHeight);
     }
-    
-    // p5.js preload not needed here
 </script>
 </body>
 </html>
