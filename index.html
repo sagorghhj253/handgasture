@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Neon Cat's Cradle - Hand Tracking String Animation</title>
+    <title>Neon Cat's Cradle - Hand Tracking</title>
     <style>
         * {
             margin: 0;
@@ -34,12 +34,10 @@
             color: #00ff88;
             text-shadow: 0 0 10px #00ff88;
             z-index: 10;
-            background: rgba(10, 14, 39, 0.7);
+            background: rgba(10, 14, 39, 0.8);
             padding: 12px 16px;
             border: 1px solid #00ff88;
             border-radius: 4px;
-            font-family: 'Courier New', monospace;
-            backdrop-filter: blur(4px);
         }
 
         #stats {
@@ -50,102 +48,32 @@
             color: #00ffff;
             text-shadow: 0 0 8px #00ffff;
             z-index: 10;
-            background: rgba(10, 14, 39, 0.7);
+            background: rgba(10, 14, 39, 0.8);
             padding: 12px 16px;
             border: 1px solid #00ffff;
             border-radius: 4px;
-            font-family: 'Courier New', monospace;
-            backdrop-filter: blur(4px);
-            min-width: 140px;
         }
 
-        #loading {
+        #debug {
             position: absolute;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%);
-            text-align: center;
-            color: #ff00ff;
-            text-shadow: 0 0 20px #ff00ff;
-            font-size: 18px;
-            z-index: 20;
-        }
-
-        .spinner {
-            border: 2px solid #00ff88;
-            border-top-color: #ff00ff;
-            border-radius: 50%;
-            width: 40px;
-            height: 40px;
-            animation: spin 1s linear infinite;
-            margin: 20px auto;
-        }
-
-        @keyframes spin {
-            to { transform: rotate(360deg); }
-        }
-
-        #permission-prompt {
-            position: absolute;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%);
-            background: rgba(10, 14, 39, 0.95);
-            border: 2px solid #ff00ff;
-            border-radius: 8px;
-            padding: 40px;
-            text-align: center;
-            color: #00ff88;
-            z-index: 25;
-            max-width: 400px;
-            backdrop-filter: blur(10px);
-            display: none;
-        }
-
-        #permission-prompt h2 {
-            color: #ff00ff;
-            margin-bottom: 20px;
-            text-shadow: 0 0 20px #ff00ff;
-        }
-
-        #permission-prompt p {
-            margin-bottom: 20px;
-            line-height: 1.6;
-        }
-
-        #permission-prompt button {
-            background: linear-gradient(135deg, #00ff88, #00ffff);
-            border: none;
-            color: #0a0e27;
-            padding: 12px 30px;
-            font-size: 14px;
+            bottom: 20px;
+            left: 20px;
+            font-size: 10px;
+            color: #ffff00;
+            text-shadow: 0 0 8px #ffff00;
+            z-index: 10;
+            background: rgba(10, 14, 39, 0.8);
+            padding: 10px 12px;
+            border: 1px solid #ffff00;
             border-radius: 4px;
-            cursor: pointer;
-            font-weight: bold;
-            transition: all 0.3s ease;
-            text-shadow: 0 0 5px rgba(0, 255, 136, 0.3);
-        }
-
-        #permission-prompt button:hover {
-            box-shadow: 0 0 30px #00ff88, 0 0 60px #00ffff;
-            transform: scale(1.05);
         }
     </style>
 </head>
 <body>
-    <div id="permission-prompt">
-        <h2>Camera Access Required</h2>
-        <p>This application needs access to your webcam to track hand movements and create the string animation.</p>
-        <button onclick="requestCamera()">Enable Camera</button>
-    </div>
-
-    <div id="loading" style="display: none;">
-        <div>Loading MediaPipe Hands...</div>
-        <div class="spinner"></div>
-    </div>
+    <canvas id="canvas"></canvas>
 
     <div id="status">
-        <div id="status-text">Initializing...</div>
+        <div id="status-text">Loading...</div>
     </div>
 
     <div id="stats">
@@ -153,39 +81,45 @@
         <div id="hands-text">Hands: 0</div>
     </div>
 
-    <!-- Load libraries from CDN -->
-    <script async src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.7.0/p5.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
+    <div id="debug">
+        <div id="debug-text">Initializing...</div>
+    </div>
+
+    <!-- MediaPipe Hands Library -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils@0.4.1633559619/camera_utils.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils@0.4.1633559619/drawing_utils.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1633559619/hands.js"></script>
 
     <script>
-        // Global variables
-        let camera, hands, results = null;
-        let canvasElement, ctx;
-        let videoElement;
-        let isInitialized = false;
-        let particles = [];
-        let lastFrameTime = 0;
-        let frameCount = 0;
-        let fps = 0;
+        // ==================== CONFIGURATION ====================
+        const APP = {
+            canvas: null,
+            ctx: null,
+            video: null,
+            hands: null,
+            camera: null,
+            results: null,
+            running: false,
+            particles: [],
+            lastTime: 0,
+            fps: 0,
+        };
 
-        // Neon color palette
-        const colors = {
+        const COLORS = {
             cyan: { r: 0, g: 255, b: 255 },
             magenta: { r: 255, g: 0, b: 255 },
             lime: { r: 0, g: 255, b: 136 },
             yellow: { r: 255, g: 255, b: 0 },
-            purple: { r: 150, g: 0, b: 255 }
+            purple: { r: 150, g: 0, b: 255 },
         };
 
-        // Particle effect for hand touches
+        // ==================== PARTICLE CLASS ====================
         class Particle {
             constructor(x, y, color) {
                 this.x = x;
                 this.y = y;
                 this.vx = (Math.random() - 0.5) * 8;
-                this.vy = (Math.random() - 0.5) * 8;
+                this.vy = (Math.random() - 0.5) * 8 - 2;
                 this.life = 1;
                 this.color = color;
                 this.size = Math.random() * 4 + 2;
@@ -194,7 +128,7 @@
             update() {
                 this.x += this.vx;
                 this.y += this.vy;
-                this.vy += 0.2; // gravity
+                this.vy += 0.2;
                 this.life -= 0.02;
                 this.vx *= 0.98;
             }
@@ -209,102 +143,63 @@
                 ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
                 ctx.fill();
                 ctx.globalAlpha = 1;
+                ctx.shadowBlur = 0;
             }
         }
 
-        // Initialize MediaPipe Hands
-        async function initializeHands() {
-            const loadingDiv = document.getElementById('loading');
-            loadingDiv.style.display = 'block';
-
-            hands = new Hands({
-                locateFile: (file) => {
-                    return `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`;
-                }
-            });
-
-            hands.setOptions({
-                maxNumHands: 2,
-                modelComplexity: 1,
-                minDetectionConfidence: 0.5,
-                minTrackingConfidence: 0.5
-            });
-
-            hands.onResults(onResults);
-
-            // Set up camera
-            const videoElement = document.createElement('video');
-            videoElement.style.display = 'none';
-            document.body.appendChild(videoElement);
-
-            camera = new Camera(videoElement, {
-                onFrame: async () => {
-                    await hands.send({ image: videoElement });
-                },
-                width: 1280,
-                height: 720
-            });
-
-            camera.start();
-            isInitialized = true;
-            loadingDiv.style.display = 'none';
-            updateStatus('Ready! Show your hands to the camera...');
+        // ==================== UTILITY FUNCTIONS ====================
+        function log(msg) {
+            console.log('[CAT CRADLE]', msg);
+            document.getElementById('debug-text').textContent = msg;
         }
 
-        // Handle MediaPipe results
-        function onResults(resultsObj) {
-            results = resultsObj;
+        function setStatus(msg) {
+            document.getElementById('status-text').textContent = msg;
         }
 
-        // Request camera permission
-        function requestCamera() {
-            document.getElementById('permission-prompt').style.display = 'none';
-            initializeHands();
-        }
-
-        // Update status text
-        function updateStatus(text) {
-            document.getElementById('status-text').textContent = text;
-        }
-
-        // Get color based on hand index and landmark index
-        function getColorForLandmark(handIndex, landmarkIndex) {
-            const colorArray = Object.values(colors);
-            const hueOffset = (handIndex * 0.3 + landmarkIndex * 0.02) % 1;
-            const colorIndex = Math.floor(hueOffset * colorArray.length) % colorArray.length;
-            return colorArray[colorIndex];
-        }
-
-        // Linear interpolation for smooth values
-        function lerp(a, b, t) {
-            return a + (b - a) * t;
-        }
-
-        // Calculate distance between two points
         function distance(p1, p2) {
             const dx = p1.x - p2.x;
             const dy = p1.y - p2.y;
             return Math.sqrt(dx * dx + dy * dy);
         }
 
-        // Draw a glowing line
-        function drawGlowLine(ctx, x1, y1, x2, y2, color, thickness = 2) {
+        function getColor(handIdx, landmarkIdx) {
+            const colorArray = Object.values(COLORS);
+            const idx = (handIdx * 7 + landmarkIdx) % colorArray.length;
+            return colorArray[idx];
+        }
+
+        function drawGlowJoint(x, y, color, size = 6) {
+            const ctx = APP.ctx;
+            ctx.shadowColor = `rgb(${color.r}, ${color.g}, ${color.b})`;
+            ctx.shadowBlur = 20;
+            ctx.fillStyle = `rgb(${color.r}, ${color.g}, ${color.b})`;
+            ctx.beginPath();
+            ctx.arc(x, y, size, 0, Math.PI * 2);
+            ctx.fill();
+
+            ctx.shadowBlur = 8;
+            ctx.fillStyle = '#ffffff';
+            ctx.beginPath();
+            ctx.arc(x, y, size * 0.4, 0, Math.PI * 2);
+            ctx.fill();
+        }
+
+        function drawGlowLine(x1, y1, x2, y2, color, thickness = 2) {
+            const ctx = APP.ctx;
             ctx.strokeStyle = `rgb(${color.r}, ${color.g}, ${color.b})`;
             ctx.lineWidth = thickness;
             ctx.lineCap = 'round';
             ctx.lineJoin = 'round';
-
-            // Multiple glow passes for stronger effect
             ctx.shadowColor = `rgb(${color.r}, ${color.g}, ${color.b})`;
             ctx.shadowBlur = 25;
-            ctx.globalAlpha = 0.6;
 
+            ctx.globalAlpha = 0.8;
             ctx.beginPath();
             ctx.moveTo(x1, y1);
             ctx.lineTo(x2, y2);
             ctx.stroke();
 
-            // Brighter core
             ctx.shadowBlur = 12;
             ctx.globalAlpha = 1;
             ctx.lineWidth = thickness * 0.6;
@@ -314,204 +209,262 @@
             ctx.stroke();
 
             ctx.globalAlpha = 1;
+            ctx.shadowBlur = 0;
         }
 
-        // Draw a glowing joint
-        function drawGlowJoint(ctx, x, y, color, size = 6) {
-            ctx.shadowColor = `rgb(${color.r}, ${color.g}, ${color.b})`;
-            ctx.shadowBlur = 20;
-            ctx.fillStyle = `rgb(${color.r}, ${color.g}, ${color.b})`;
-            ctx.beginPath();
-            ctx.arc(x, y, size, 0, Math.PI * 2);
-            ctx.fill();
+        // ==================== MEDIAPIPE SETUP ====================
+        async function setupMediaPipe() {
+            log('Setting up MediaPipe...');
 
-            // Inner bright core
-            ctx.shadowBlur = 8;
-            ctx.fillStyle = '#ffffff';
-            ctx.beginPath();
-            ctx.arc(x, y, size * 0.4, 0, Math.PI * 2);
-            ctx.fill();
+            APP.hands = new Hands({
+                locateFile: (file) => {
+                    return `https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1633559619/${file}`;
+                }
+            });
+
+            APP.hands.setOptions({
+                maxNumHands: 2,
+                modelComplexity: 1,
+                minDetectionConfidence: 0.5,
+                minTrackingConfidence: 0.5,
+            });
+
+            APP.hands.onResults((results) => {
+                APP.results = results;
+            });
+
+            log('MediaPipe ready');
         }
 
-        // Custom p5.js sketch
-        const sketch = (p) => {
-            p.setup = function () {
-                const container = document.body;
-                const w = container.clientWidth;
-                const h = container.clientHeight;
-                canvasElement = p.createCanvas(w, h);
-                canvasElement.style('display', 'block');
-                canvasElement.style('margin', '0');
-                ctx = canvasElement.elt.getContext('2d');
-                
-                // Show permission prompt on start
-                document.getElementById('permission-prompt').style.display = 'block';
-            };
+        async function setupCamera() {
+            log('Requesting camera access...');
 
-            p.windowResized = function () {
-                if (canvasElement) {
-                    p.resizeCanvas(window.innerWidth, window.innerHeight);
-                }
-            };
+            APP.video = document.createElement('video');
+            APP.video.style.display = 'none';
+            document.body.appendChild(APP.video);
 
-            p.draw = function () {
-                // Update FPS
-                const currentTime = performance.now();
-                if (lastFrameTime !== 0) {
-                    const deltaTime = currentTime - lastFrameTime;
-                    fps = 1000 / deltaTime;
-                }
-                lastFrameTime = currentTime;
-                frameCount++;
-
-                // Dark background
-                ctx.fillStyle = '#0a0e27';
-                ctx.fillRect(0, 0, p.width, p.height);
-
-                if (!isInitialized) {
-                    return;
-                }
-
-                // Draw hand landmarks and connections
-                if (results && results.multiHandLandmarks) {
-                    const numHands = results.multiHandLandmarks.length;
-
-                    // Draw each hand
-                    for (let handIndex = 0; handIndex < numHands; handIndex++) {
-                        const landmarks = results.multiHandLandmarks[handIndex];
-
-                        // Draw hand skeleton (connections)
-                        const connections = [
-                            [0, 1], [1, 2], [2, 3], [3, 4], // Thumb
-                            [0, 5], [5, 6], [6, 7], [7, 8], // Index
-                            [0, 9], [9, 10], [10, 11], [11, 12], // Middle
-                            [0, 13], [13, 14], [14, 15], [15, 16], // Ring
-                            [0, 17], [17, 18], [18, 19], [19, 20] // Pinky
-                        ];
-
-                        for (const [start, end] of connections) {
-                            const p1 = landmarks[start];
-                            const p2 = landmarks[end];
-
-                            const x1 = p1.x * p.width;
-                            const y1 = p1.y * p.height;
-                            const x2 = p2.x * p.width;
-                            const y2 = p2.y * p.height;
-
-                            const color = getColorForLandmark(handIndex, start);
-                            drawGlowLine(ctx, x1, y1, x2, y2, color, 1.5);
+            try {
+                APP.camera = new Camera(APP.video, {
+                    onFrame: async () => {
+                        try {
+                            await APP.hands.send({ image: APP.video });
+                        } catch (e) {
+                            console.error('Hand detection error:', e);
                         }
+                    },
+                    width: 1280,
+                    height: 720,
+                });
 
-                        // Draw joints
-                        for (let i = 0; i < landmarks.length; i++) {
-                            const landmark = landmarks[i];
-                            const x = landmark.x * p.width;
-                            const y = landmark.y * p.height;
-                            const color = getColorForLandmark(handIndex, i);
+                await APP.camera.start();
+                log('Camera started');
+                APP.running = true;
+            } catch (error) {
+                log('Camera error: ' + error.message);
+                setStatus('❌ Camera access denied');
+                throw error;
+            }
+        }
 
-                            drawGlowJoint(ctx, x, y, color, 4);
-                        }
+        // ==================== RENDERING ====================
+        function drawHands() {
+            if (!APP.results || !APP.results.multiHandLandmarks) return;
+
+            const landmarks = APP.results.multiHandLandmarks;
+            const numHands = landmarks.length;
+
+            // Draw each hand skeleton
+            for (let handIdx = 0; handIdx < numHands; handIdx++) {
+                const hand = landmarks[handIdx];
+
+                const connections = [
+                    [0, 1], [1, 2], [2, 3], [3, 4],
+                    [0, 5], [5, 6], [6, 7], [7, 8],
+                    [0, 9], [9, 10], [10, 11], [11, 12],
+                    [0, 13], [13, 14], [14, 15], [15, 16],
+                    [0, 17], [17, 18], [18, 19], [19, 20]
+                ];
+
+                for (const [start, end] of connections) {
+                    const p1 = hand[start];
+                    const p2 = hand[end];
+                    const x1 = p1.x * APP.canvas.width;
+                    const y1 = p1.y * APP.canvas.height;
+                    const x2 = p2.x * APP.canvas.width;
+                    const y2 = p2.y * APP.canvas.height;
+
+                    const color = getColor(handIdx, start);
+                    drawGlowLine(x1, y1, x2, y2, color, 1.5);
+                }
+
+                // Draw joints
+                for (let i = 0; i < hand.length; i++) {
+                    const landmark = hand[i];
+                    const x = landmark.x * APP.canvas.width;
+                    const y = landmark.y * APP.canvas.height;
+                    const color = getColor(handIdx, i);
+                    drawGlowJoint(x, y, color, 4);
+                }
+            }
+
+            // Draw strings between hand fingertips
+            if (numHands === 2) {
+                const left = landmarks[0];
+                const right = landmarks[1];
+                const fingertips = [4, 8, 12, 16, 20];
+
+                for (let i = 0; i < fingertips.length; i++) {
+                    const leftTip = left[fingertips[i]];
+                    const rightTip = right[fingertips[i]];
+
+                    const x1 = leftTip.x * APP.canvas.width;
+                    const y1 = leftTip.y * APP.canvas.height;
+                    const x2 = rightTip.x * APP.canvas.width;
+                    const y2 = rightTip.y * APP.canvas.height;
+
+                    const dist = distance({ x: x1, y: y1 }, { x: x2, y: y2 });
+                    const maxDist = Math.sqrt(APP.canvas.width ** 2 + APP.canvas.height ** 2) * 0.5;
+                    const norm = Math.min(dist / maxDist, 1);
+
+                    // Color gradient based on distance
+                    let color;
+                    if (norm < 0.33) {
+                        color = COLORS.lime;
+                    } else if (norm < 0.66) {
+                        const t = (norm - 0.33) / 0.33;
+                        color = {
+                            r: Math.round(COLORS.lime.r * (1 - t) + COLORS.yellow.r * t),
+                            g: Math.round(COLORS.lime.g * (1 - t) + COLORS.yellow.g * t),
+                            b: Math.round(COLORS.lime.b * (1 - t) + COLORS.yellow.b * t),
+                        };
+                    } else {
+                        const t = (norm - 0.66) / 0.34;
+                        color = {
+                            r: Math.round(COLORS.yellow.r * (1 - t) + COLORS.magenta.r * t),
+                            g: Math.round(COLORS.yellow.g * (1 - t) + COLORS.magenta.g * t),
+                            b: Math.round(COLORS.yellow.b * (1 - t) + COLORS.magenta.b * t),
+                        };
                     }
 
-                    // Draw strings between left and right hand fingertips
-                    if (numHands === 2) {
-                        const leftHand = results.multiHandLandmarks[0];
-                        const rightHand = results.multiHandLandmarks[1];
+                    const thickness = 1 + norm * 3;
+                    const controlX = (x1 + x2) / 2;
+                    const controlY = (y1 + y2) / 2 + norm * 30;
 
-                        // Fingertip indices: 4 (thumb), 8 (index), 12 (middle), 16 (ring), 20 (pinky)
-                        const fingertips = [4, 8, 12, 16, 20];
+                    const ctx = APP.ctx;
+                    ctx.strokeStyle = `rgb(${color.r}, ${color.g}, ${color.b})`;
+                    ctx.lineWidth = thickness;
+                    ctx.lineCap = 'round';
+                    ctx.shadowColor = `rgb(${color.r}, ${color.g}, ${color.b})`;
+                    ctx.shadowBlur = 20 + norm * 15;
 
-                        for (let i = 0; i < fingertips.length; i++) {
-                            const leftTip = leftHand[fingertips[i]];
-                            const rightTip = rightHand[fingertips[i]];
+                    ctx.globalAlpha = 0.8;
+                    ctx.beginPath();
+                    ctx.moveTo(x1, y1);
+                    ctx.quadraticCurveTo(controlX, controlY, x2, y2);
+                    ctx.stroke();
 
-                            const x1 = leftTip.x * p.width;
-                            const y1 = leftTip.y * p.height;
-                            const x2 = rightTip.x * p.width;
-                            const y2 = rightTip.y * p.height;
+                    ctx.globalAlpha = 1;
+                    ctx.shadowBlur = 0;
 
-                            // Calculate distance for thickness and color variation
-                            const dist = distance({ x: x1, y: y1 }, { x: x2, y: y2 });
-                            const maxDist = Math.sqrt(p.width * p.width + p.height * p.height) * 0.5;
-                            const normalizedDist = Math.min(dist / maxDist, 1);
-
-                            // Color transitions based on distance
-                            let color;
-                            if (normalizedDist < 0.33) {
-                                color = colors.lime;
-                            } else if (normalizedDist < 0.66) {
-                                const t = (normalizedDist - 0.33) / 0.33;
-                                color = {
-                                    r: Math.round(colors.lime.r * (1 - t) + colors.yellow.r * t),
-                                    g: Math.round(colors.lime.g * (1 - t) + colors.yellow.g * t),
-                                    b: Math.round(colors.lime.b * (1 - t) + colors.yellow.b * t)
-                                };
-                            } else {
-                                const t = (normalizedDist - 0.66) / 0.34;
-                                color = {
-                                    r: Math.round(colors.yellow.r * (1 - t) + colors.magenta.r * t),
-                                    g: Math.round(colors.yellow.g * (1 - t) + colors.magenta.g * t),
-                                    b: Math.round(colors.yellow.b * (1 - t) + colors.magenta.b * t)
-                                };
-                            }
-
-                            // Thickness varies with distance (elastic feel)
-                            const thickness = 1 + normalizedDist * 3;
-
-                            // Draw with elastic curve
-                            const controlX = (x1 + x2) / 2;
-                            const controlY = (y1 + y2) / 2 + normalizedDist * 30;
-
-                            ctx.strokeStyle = `rgb(${color.r}, ${color.g}, ${color.b})`;
-                            ctx.lineWidth = thickness;
-                            ctx.lineCap = 'round';
-                            ctx.shadowColor = `rgb(${color.r}, ${color.g}, ${color.b})`;
-                            ctx.shadowBlur = 20 + normalizedDist * 15;
-
-                            ctx.beginPath();
-                            ctx.moveTo(x1, y1);
-                            ctx.quadraticCurveTo(controlX, controlY, x2, y2);
-                            ctx.stroke();
-
-                            // Check for fingertip collision (touch)
-                            if (dist < 40) {
-                                // Create particle explosion
-                                for (let p = 0; p < 8; p++) {
-                                    const explosionX = (x1 + x2) / 2;
-                                    const explosionY = (y1 + y2) / 2;
-                                    particles.push(new Particle(explosionX, explosionY, color));
-                                }
-                            }
+                    // Particle collision effect
+                    if (dist < 40) {
+                        for (let p = 0; p < 8; p++) {
+                            const ex = (x1 + x2) / 2;
+                            const ey = (y1 + y2) / 2;
+                            APP.particles.push(new Particle(ex, ey, color));
                         }
                     }
-
-                    // Update status
-                    updateStatus(`Hands detected: ${numHands}`);
-                    document.getElementById('hands-text').textContent = `Hands: ${numHands}`;
-                } else {
-                    updateStatus('Waiting for hands...');
-                    document.getElementById('hands-text').textContent = 'Hands: 0';
                 }
+            }
+        }
 
-                // Update and draw particles
-                for (let i = particles.length - 1; i >= 0; i--) {
-                    particles[i].update();
-                    particles[i].draw(ctx);
-                    if (particles[i].life <= 0) {
-                        particles.splice(i, 1);
-                    }
+        function drawParticles() {
+            for (let i = APP.particles.length - 1; i >= 0; i--) {
+                APP.particles[i].update();
+                APP.particles[i].draw(APP.ctx);
+                if (APP.particles[i].life <= 0) {
+                    APP.particles.splice(i, 1);
                 }
+            }
+        }
 
-                // Update FPS display
-                document.getElementById('stats-text').textContent = `FPS: ${Math.round(fps)}`;
+        // ==================== ANIMATION LOOP ====================
+        function animate() {
+            const now = performance.now();
+            if (APP.lastTime !== 0) {
+                const delta = now - APP.lastTime;
+                APP.fps = 1000 / delta;
+            }
+            APP.lastTime = now;
 
-                ctx.shadowBlur = 0;
-                ctx.shadowColor = 'transparent';
-            };
-        };
+            // Clear canvas
+            APP.ctx.fillStyle = '#0a0e27';
+            APP.ctx.fillRect(0, 0, APP.canvas.width, APP.canvas.height);
 
-        // Initialize p5.js
-        new p5(sketch);
+            if (APP.running) {
+                drawHands();
+                drawParticles();
+
+                const handCount = APP.results && APP.results.multiHandLandmarks ? APP.results.multiHandLandmarks.length : 0;
+                setStatus(`✓ Running | Hands: ${handCount}`);
+                document.getElementById('hands-text').textContent = `Hands: ${handCount}`;
+            }
+
+            document.getElementById('stats-text').textContent = `FPS: ${Math.round(APP.fps)}`;
+
+            requestAnimationFrame(animate);
+        }
+
+        // ==================== INITIALIZATION ====================
+        async function init() {
+            try {
+                // Canvas setup
+                APP.canvas = document.getElementById('canvas');
+                APP.ctx = APP.canvas.getContext('2d');
+                APP.canvas.width = window.innerWidth;
+                APP.canvas.height = window.innerHeight;
+
+                log('Canvas initialized');
+
+                // MediaPipe setup
+                await setupMediaPipe();
+
+                // Camera setup
+                await setupCamera();
+
+                // Start animation
+                animate();
+
+                setStatus('✓ Ready - Show your hands!');
+                log('All systems ready');
+            } catch (error) {
+                console.error(error);
+                log('Error: ' + error.message);
+                setStatus('❌ Initialization failed');
+            }
+        }
+
+        // Handle window resize
+        window.addEventListener('resize', () => {
+            if (APP.canvas) {
+                APP.canvas.width = window.innerWidth;
+                APP.canvas.height = window.innerHeight;
+            }
+        });
+
+        // Start when DOM is ready
+        window.addEventListener('load', () => {
+            log('Page loaded');
+            init();
+        });
+
+        // Fallback if load event doesn't fire
+        setTimeout(() => {
+            if (!APP.running) {
+                log('Timeout - forcing init');
+                init();
+            }
+        }, 2000);
     </script>
 </body>
 </html>
